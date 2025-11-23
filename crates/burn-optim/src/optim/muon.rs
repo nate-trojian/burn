@@ -1,17 +1,20 @@
+use burn_core as burn;
+
+use burn::config::Config;
+use burn::tensor::{Tensor, backend::AutodiffBackend};
+use burn::tensor::{backend::Backend, ops::Device};
+use burn::{module::AutodiffModule, record::Record};
+
 use super::SimpleOptimizer;
 use super::adaptor::OptimizerAdaptor;
 use crate::grad_clipping::GradientClippingConfig;
-use crate::record::Record;
-use crate::tensor::{
-    Tensor,
-    backend::{AutodiffBackend, Backend},
-    ops::Device,
-};
-use crate::{self as burn};
-use crate::{config::Config, module::AutodiffModule};
 
-/// Muon configuration.
-#[derive(Config)]
+#[cfg(not(feature = "std"))]
+#[allow(unused_imports)]
+use num_traits::Float as _;
+
+/// [`Muon`] configuration.
+#[derive(Config, Debug)]
 pub struct MuonConfig {
     /// Learning rate.
     #[config(default = 0.02)]
@@ -36,10 +39,10 @@ pub struct MuonState<B: Backend, const D: usize> {
 #[derive(Clone)]
 pub enum NewtonShulz {
     /// Stable Newton-Shulz implementation by @YouJiacheng.
-    /// from https://github.com/modula-systems/modula/blob/aed70cddf2d3ab74fa218b1377840d1fd795cfcf/modula/atom.py#L6C1-L31C13
+    /// from <https://github.com/modula-systems/modula/blob/aed70cddf2d3ab74fa218b1377840d1fd795cfcf/modula/atom.py#L6C1-L31C13>
     Stable,
     /// Performant Newton-Shulz implementation.
-    /// from https://docs.modula.systems/algorithms/newton-schulz/#a-cursed-quintic-iteration
+    /// from <https://docs.modula.systems/algorithms/newton-schulz/#a-cursed-quintic-iteration>
     Speed,
 }
 
@@ -75,7 +78,7 @@ impl NewtonShulz {
                         + abc_list[3 * i + 2] * a.clone().matmul(a.clone());
                     x = abc_list[3 * i] * x.clone() + m.matmul(x.clone());
                 }
-                return x;
+                x
             }
             NewtonShulz::Speed => {
                 let mut x = x.clone();
@@ -85,7 +88,7 @@ impl NewtonShulz {
                     let m: Tensor<_, 2> = b * xtx.clone() + c * xtx.clone().matmul(xtx.clone());
                     x = a * x.clone() + m.matmul(x.clone());
                 }
-                return x;
+                x
             }
         }
     }
@@ -129,6 +132,10 @@ impl<B: Backend> SimpleOptimizer<B> for Muon {
         grad: Tensor<B, D>,
         state: Option<Self::State<D>>,
     ) -> (Tensor<B, D>, Option<Self::State<D>>) {
+        if D != 2 {
+            panic!("Newton-Schulz iteration requires 2D tensors, got {}D", D);
+        }
+
         let tensor_updated = tensor.clone() - tensor.mul_scalar(lr).mul_scalar(self.weight_decay);
         let prev_momentum_buffer = if let Some(state) = state {
             state.momentum_buffer.clone()
@@ -179,11 +186,11 @@ impl MuonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nn::{Linear, LinearConfig};
-    use crate::optim::{GradientsParams, Optimizer};
-    use crate::tensor::ops::FloatElem;
-    use crate::tensor::{Distribution, Tensor, Tolerance};
+    use crate::{GradientsParams, Optimizer};
     use crate::{LearningRate, TestAutodiffBackend};
+    use burn::tensor::ops::FloatElem;
+    use burn::tensor::{Distribution, Tensor, Tolerance};
+    use burn_nn::{Linear, LinearConfig};
 
     const LEARNING_RATE: LearningRate = 0.01;
 
@@ -200,7 +207,7 @@ mod tests {
 
         #[cfg(feature = "std")]
         {
-            use crate::record::{BinFileRecorder, FullPrecisionSettings, Recorder};
+            use burn::record::{BinFileRecorder, FullPrecisionSettings, Recorder};
 
             BinFileRecorder::<FullPrecisionSettings>::default()
                 .record(
